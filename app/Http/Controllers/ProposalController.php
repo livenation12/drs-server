@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\ProposalRequest;
+use App\Http\Resources\ProposalResource;
 use App\Models\Proposal;
 use Illuminate\Http\Request;
 
@@ -10,38 +11,25 @@ class ProposalController extends Controller
 {
 
     private $fileDirectory = 'uploads/proposals/';
-    /**
-     * Generates a tracking ID in the format mmYY - 001.
-     *
-     * The tracking ID is incremented for each new proposal in the same month.
-     * If the month changes, the counter is reset to 001.
-     *
-     * @param string|null $lastId The last tracking ID issued
-     * @return string The new tracking ID
-     */
-    private function generateTrackingId($lastId)
+    private function generateTrackingId()
     {
-        $currentMonth = date('m');
-        $currentYear = date('y');
-        $currentMonthYear = $currentMonth . $currentYear;
+        $currentYear = date('y'); // Current year (last two digits)
+        $currentMonth = date('m'); // Current month (01 to 12)
+        $currentMonthYear = $currentMonth . $currentYear; // Format as MMYY
 
-        // If there's no last ID, start with 001
-        if (empty($lastId)) {
-            return sprintf('%s - 001', $currentMonthYear);
-        }
+        // Get the highest counter for the current month/year
+        $highestCounter = Proposal::where('trackingId', 'LIKE', "$currentMonthYear%")
+            ->pluck('trackingId') // Get all matching tracking IDs
+            ->map(function ($trackingId) {
+                list(, $counter) = explode(' - ', $trackingId);
+                return (int) $counter; // Convert to integer
+            })
+            ->max(); // Find the maximum counter
 
-        // Split the last ID into month-year and counter
-        list($lastMonthYear, $counter) = explode(' - ', $lastId);
-        $counter = (int)$counter; // Convert counter to an integer for safe increment
+        // Initialize the counter
+        $counter = $highestCounter ? $highestCounter + 1 : 1; // Increment or start at 1
 
-        // Check if the month/year has changed
-        if ($lastMonthYear === $currentMonthYear) {
-            $counter++;
-        } else {
-            $counter = 1; // Reset counter if it's a new month
-        }
-
-        // Return the new tracking ID
+        // Return the new tracking ID, padded to 3 digits
         return sprintf('%s - %03d', $currentMonthYear, $counter);
     }
 
@@ -58,19 +46,43 @@ class ProposalController extends Controller
      */
     public function store(ProposalRequest $request)
     {
+        // Validate the request data
         $validatedRequest = $request->validated();
 
+        // Check if the request has a file
         if ($request->hasFile('attachment')) {
-            $uploadAttachment = $request['attachment']->storeAs($this->fileDirectory, $validatedRequest['']);
+            // Generate a tracking ID
+            $validatedRequest['trackingId'] = $this->generateTrackingId();
+
+            // Get the original file name
+            $fileExtension = $request->file('attachment')->getClientOriginalExtension();
+            $filename = str_replace(' ', '', $validatedRequest['trackingId'] . '.' . $fileExtension);
+            // Store the file and get the path
+            $uploadAttachment = $request->file('attachment')->storeAs($this->fileDirectory, $filename);
+            // Proceed only if the file was uploaded successfully
+            if ($uploadAttachment) {
+                // Store the original file name in the validatedRequest array
+                $validatedRequest['attachment'] = $filename;
+                // Create the proposal
+                $proposal = Proposal::create($validatedRequest);
+                // Return a successful response with the resource
+                return response()->json(new ProposalResource($proposal), 201);
+            } else {
+                return response()->json(['error' => 'File upload failed.'], 500);
+            }
+        } else {
+            return response()->json(['error' => 'No attachment found.'], 400);
         }
     }
+
+
 
     /**
      * Display the specified resource.
      */
-    public function show(string $id)
+    public function show(ProposalResource $proposal)
     {
-        //
+
     }
 
     /**
